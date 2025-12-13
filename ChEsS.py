@@ -104,8 +104,9 @@ class Minichess:
         return self.get_state()
     
     def get_state(self):
-        """Return hashable board state"""
-        return tuple(tuple(row) for row in self.board)
+        """Return hashable board state with native Python types"""
+        # Crucial fix: Convert numpy strings to Python strings for safe JSON serialization
+        return tuple(tuple(str(c) for c in row) for row in self.board)
     
     def copy(self):
         """Deep copy of game state"""
@@ -781,6 +782,10 @@ def visualize_board(board, title="Minichess Board", last_move=None):
 # Serialization
 # ============================================================================
 
+# ============================================================================
+# Serialization (Fixed)
+# ============================================================================
+
 def serialize_move(move):
     return {
         "s": [int(x) for x in move.start],
@@ -802,21 +807,24 @@ def deserialize_move(data):
 def create_agents_zip(agent1, agent2, config):
     def serialize_agent(agent, role_name):
         clean_policy = {}
+        # Make a copy to avoid runtime modification errors
         current_policies = agent.policy_table.copy()
         
         for state, moves in current_policies.items():
             try:
+                # Ensure state is stringified safely
                 state_str = str(state)
                 clean_policy[state_str] = {}
                 
                 for move, value in moves.items():
+                    # Serialize move object to JSON string to use as dict key
                     move_json_str = json.dumps(serialize_move(move))
                     clean_policy[state_str][move_json_str] = float(value)
             except Exception:
                 continue
         
         return {
-            "metadata": {"role": role_name, "version": "2.0"},
+            "metadata": {"role": role_name, "version": "2.1"},
             "policy_table": clean_policy,
             "epsilon": float(agent.epsilon),
             "wins": int(agent.wins),
@@ -856,32 +864,44 @@ def load_agents_from_zip(uploaded_file):
                 agent.draws = data.get('draws', 0)
                 agent.mcts_simulations = data.get('mcts_sims', 50)
                 
+                # Reset policy table
                 agent.policy_table = defaultdict(lambda: defaultdict(float))
-                loaded_policies = 0
+                loaded_policies_count = 0
+                
                 policy_data = data.get('policy_table', {})
                 
                 for state_str, moves_dict in policy_data.items():
                     try:
+                        # Convert string "((...))" back to tuple
                         state = ast.literal_eval(state_str)
+                        
                         for move_json_str, value in moves_dict.items():
+                            # Convert JSON string key back to dict, then to Move object
                             move_dict = json.loads(move_json_str)
                             move = deserialize_move(move_dict)
                             agent.policy_table[state][move] = value
-                        loaded_policies += 1
+                        
+                        loaded_policies_count += 1
                     except Exception:
+                        # Skip malformed entries but continue loading others
                         continue
-                return loaded_policies
+                        
+                return loaded_policies_count
             
+            # Recreate Agent 1
             agent1 = Agent(1, config.get('lr1', 0.3), config.get('gamma1', 0.95))
             count1 = restore_agent(agent1, a1_data)
             
+            # Recreate Agent 2
             agent2 = Agent(2, config.get('lr2', 0.3), config.get('gamma2', 0.95))
             count2 = restore_agent(agent2, a2_data)
             
             return agent1, agent2, config, count1 + count2
+            
     except Exception as e:
         st.error(f"❌ Error loading brain: {str(e)}")
         return None, None, None, 0
+
 
 # ============================================================================
 # Streamlit UI
@@ -945,15 +965,24 @@ with st.sidebar.expander("4. Brain Storage 💾", expanded=False):
     uploaded_file = st.file_uploader("📤 Upload Saved Agents (.zip)", type="zip")
     if uploaded_file is not None:
         if st.button("🔄 Load Agents", use_container_width=True):
-            a1, a2, cfg, count = load_agents_from_zip(uploaded_file)
-            if a1 and a2:
-                st.session_state.agent1 = a1
-                st.session_state.agent2 = a2
-                st.session_state.training_history = cfg.get("training_history", None)
-                st.toast(f"✅ Loaded Brain! {count} memories restored.", icon="🧠")
-                import time
-                time.sleep(1)
-                st.rerun()
+            with st.spinner("Restoring neural pathways..."):
+                a1, a2, cfg, count = load_agents_from_zip(uploaded_file)
+                if a1 and a2:
+                    st.session_state.agent1 = a1
+                    st.session_state.agent2 = a2
+                    st.session_state.training_history = cfg.get("training_history", None)
+                    
+                    # Force update of the environment agents
+                    st.session_state.env = Minichess()
+                    
+                    # Success message
+                    st.toast(f"✅ Brain Loaded! {count} memories restored.", icon="🧠")
+                    st.success(f"Successfully loaded {count} policies! You can now Play or Watch.")
+                    
+                    # Wait a moment then rerun to unlock the UI
+                    import time
+                    time.sleep(1.5)
+                    st.rerun()
 
 train_button = st.sidebar.button("🚀 Begin Self-Play Training", 
                                  use_container_width=True, type="primary")
