@@ -55,7 +55,8 @@ class Move:
     
     def __eq__(self, other):
         return (self.start == other.start and self.end == other.end and 
-                self.piece == other.piece)
+                self.piece == other.piece and self.captured == other.captured and 
+                self.promotion == other.promotion)
     
     def to_notation(self):
         """Convert to algebraic notation"""
@@ -850,35 +851,59 @@ def load_agents_from_zip(uploaded_file):
             config = json.loads(zf.read("config.json").decode('utf-8'))
             
             def restore_agent(agent, data):
+                # Restore basic stats
                 agent.epsilon = data.get('epsilon', 0.1)
                 agent.wins = data.get('wins', 0)
                 agent.losses = data.get('losses', 0)
                 agent.draws = data.get('draws', 0)
                 agent.mcts_simulations = data.get('mcts_sims', 50)
                 
+                # Restore Grandmaster specific stats if they exist
+                if hasattr(agent, 'training_steps'):
+                    agent.training_steps = data.get('training_steps', 0)
+                
+                # CRITICAL FIX: Re-initialize policy table with correct lambda
                 agent.policy_table = defaultdict(lambda: defaultdict(float))
+                
                 loaded_policies = 0
                 policy_data = data.get('policy_table', {})
                 
                 for state_str, moves_dict in policy_data.items():
                     try:
+                        # Safe parsing of the board state tuple
                         state = ast.literal_eval(state_str)
+                        
+                        # Load moves for this state
                         for move_json_str, value in moves_dict.items():
-                            move_dict = json.loads(move_json_str)
-                            move = deserialize_move(move_dict)
-                            agent.policy_table[state][move] = value
+                            try:
+                                move_dict = json.loads(move_json_str)
+                                move = deserialize_move(move_dict)
+                                agent.policy_table[state][move] = value
+                            except Exception:
+                                continue # Skip individual bad moves, not the whole state
+                                
                         loaded_policies += 1
                     except Exception:
-                        continue
+                        continue # Skip bad states
+                
                 return loaded_policies
             
-            agent1 = Agent(1, config.get('lr1', 0.3), config.get('gamma1', 0.95))
-            count1 = restore_agent(agent1, a1_data)
+            # Recreate Agents based on Config
+            # (Works for both ChEsS and QChEsS parameters)
+            lr1 = config.get('lr1', 0.3)
+            gamma1 = config.get('gamma1', 0.95)
+            agent1 = Agent(1, lr1, gamma1)
             
-            agent2 = Agent(2, config.get('lr2', 0.3), config.get('gamma2', 0.95))
+            lr2 = config.get('lr2', 0.3)
+            gamma2 = config.get('gamma2', 0.95)
+            agent2 = Agent(2, lr2, gamma2)
+            
+            # Restore memories
+            count1 = restore_agent(agent1, a1_data)
             count2 = restore_agent(agent2, a2_data)
             
             return agent1, agent2, config, count1 + count2
+            
     except Exception as e:
         st.error(f"❌ Error loading brain: {str(e)}")
         return None, None, None, 0
