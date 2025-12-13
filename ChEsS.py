@@ -1131,7 +1131,7 @@ if 'agent1' in st.session_state and len(agent1.policy_table) > 50:
                 plt.close(fig)
                 
                 import time
-                time.sleep(0.3)
+                time.sleep(1)
         
         if sim_env.winner == 1:
             st.success("🏆 Agent 1 (White) Wins!")
